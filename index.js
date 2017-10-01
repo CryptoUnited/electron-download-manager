@@ -19,7 +19,7 @@ function _registerListener(win, opts = {}, cb = () => {}) {
 
         let queueItem = _popQueueItem(item.getURL());
 
-        const filePath = path.join(downloadFolder, path.join(queueItem.path, item.getFilename()));
+        const filePath = path.join(downloadFolder, path.join(queueItem.path, opts.filename || item.getFilename()));
 
         const totalBytes = item.getTotalBytes();
 
@@ -33,38 +33,38 @@ function _registerListener(win, opts = {}, cb = () => {}) {
         item.on('updated', () => {
             const progress = item.getReceivedBytes() * 100 / totalBytes;
 
-            if (typeof queueItem.onProgress === 'function') {
-                queueItem.onProgress(progress, item);
-            }
-        });
+        if (typeof queueItem.onProgress === 'function') {
+            queueItem.onProgress(progress, item);
+        }
+    });
 
         item.on('done', (e, state) => {
 
             let finishedDownloadCallback = queueItem.callback || function() {};
 
-            if (!win.isDestroyed()) {
-                win.setProgressBar(-1);
+        if (!win.isDestroyed()) {
+            win.setProgressBar(-1);
+        }
+
+        if (state === 'interrupted') {
+            const message = `The download of ${item.getFilename()} was interrupted`;
+
+            finishedDownloadCallback(new Error(message), item.getURL())
+
+        } else if (state === 'completed') {
+            if (process.platform === 'darwin') {
+                app.dock.downloadFinished(filePath);
             }
+            // TODO: remove this listener, and/or the listener that attach this listener to newly created windows
+            // if (opts.unregisterWhenDone) {
+            //     webContents.session.removeListener('will-download', listener);
+            // }
 
-            if (state === 'interrupted') {
-                const message = `The download of ${item.getFilename()} was interrupted`;
+            finishedDownloadCallback(null, item.getURL());
 
-                finishedDownloadCallback(new Error(message), item.getURL())
+        }
 
-            } else if (state === 'completed') {
-                if (process.platform === 'darwin') {
-                    app.dock.downloadFinished(filePath);
-                }
-                // TODO: remove this listener, and/or the listener that attach this listener to newly created windows
-                // if (opts.unregisterWhenDone) {
-                //     webContents.session.removeListener('will-download', listener);
-                // }
-
-                finishedDownloadCallback(null, { url: item.getURL(), filePath });
-
-            }
-
-        });
+    });
     };
 
     win.webContents.session.on('will-download', listener);
@@ -74,7 +74,7 @@ var register = (opts = {}) => {
 
     app.on('browser-window-created', (e, win) => {
         _registerListener(win, opts);
-    });
+});
 };
 
 var fs = require('fs');
@@ -82,7 +82,8 @@ var fs = require('fs');
 var download = (options, callback) => {
     let win = BrowserWindow.getFocusedWindow() || lastWindowCreated;
     options = Object.assign({}, {
-        path: ""
+        path: "",
+        filename: "",
     }, options);
 
     request(options.url).on("response", function(response) {
@@ -95,7 +96,7 @@ var download = (options, callback) => {
             onProgress: options.onProgress
         });
 
-        const filename = path.basename(response.request.uri.href);
+        const filename = options.filename || path.basename(response.request.uri.href);
 
         const filePath = path.join(path.join(downloadFolder, options.path.toString()), filename);
 
@@ -114,6 +115,7 @@ var download = (options, callback) => {
 
                 options = {
                     path: filePath,
+                    filename: filename,
                     urlChain: [response.request.uri.href],
                     offset: parseInt(fileOffset),
                     length: serverFileSize,
@@ -126,7 +128,7 @@ var download = (options, callback) => {
 
                 let finishedDownloadCallback = callback || function() {};
 
-                finishedDownloadCallback(null, { url: response.request.uri.href, filePath });
+                finishedDownloadCallback(null, response.request.uri.href);
             }
 
         } else {
@@ -150,28 +152,28 @@ var bulkDownload = (options, callback) => {
 
     options.urls.forEach((url) => {
         download({
-            url,
-            path: options.path
-        }, function(error, item) {
+                     url,
+                     path: options.path
+}, function(error, item) {
 
-            if (error) {
-                errors.push(item);
+        if (error) {
+            errors.push(item);
+        } else {
+            finished.push(item);
+        }
+
+        let errorsCount = errors.length;
+        let finishedCount = finished.length;
+
+        if ((finishedCount + errorsCount) == urlsCount) {
+            if (errorsCount > 0) {
+                callback(new Error(errorsCount + " downloads failed"), finished, errors);
             } else {
-                finished.push(item);
+                callback(null, finished, []);
             }
-
-            let errorsCount = errors.length;
-            let finishedCount = finished.length;
-
-            if ((finishedCount + errorsCount) == urlsCount) {
-                if (errorsCount > 0) {
-                    callback(new Error(errorsCount + " downloads failed"), finished, errors);
-                } else {
-                    callback(null, finished, []);
-                }
-            }
-        })
-    });
+        }
+    })
+});
 }
 
 var _popQueueItem = (url) => {
